@@ -2,7 +2,7 @@
 
 TranquilView is a Chrome extension designed to help you reclaim your attention while watching YouTube. It eliminates distractions like comments, recommendations, and ads, providing a serene and focused viewing experience.
 
-![TranquilView Icon](icons/icon128.png)
+<img src="icons/icon128.png" alt="TranquilView Icon" width="64"/>
 
 ## Disclaimer
 This plugin is solely made for educational purposes. The developer created this project to understand the process of developing a browser plugin.
