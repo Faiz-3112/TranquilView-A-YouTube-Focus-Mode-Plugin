@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YouTube Focus</title>
+  <link rel="stylesheet" href="style.css">
+  <!-- Use Google Fonts for premium look -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+
+<body>
+  <div class="container">
+    <header>
+      <h1>YouTube Focus</h1>
+      <p class="subtitle">Customize your viewing experience</p>
+    </header>
+
+    <div class="settings-group">
+      <div class="setting-item">
+        <div class="setting-label">
+          <span class="label-text">Hide Comments</span>
+          <span class="label-desc">Remove distractions below the video</span>
+        </div>
+        <label class="toggle-switch">
+          <input type="checkbox" id="hideComments">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="setting-item">
+        <div class="setting-label">
+          <span class="label-text">Hide Recommendations</span>
+          <span class="label-desc">Disable sidebars and related videos</span>
+        </div>
+        <label class="toggle-switch">
+          <input type="checkbox" id="hideRecommendations">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="setting-item">
+        <div class="setting-label">
+          <span class="label-text">Hide Ads</span>
+          <span class="label-desc">Skip video ads and hide banners</span>
+        </div>
+        <label class="toggle-switch">
+          <input type="checkbox" id="hideAds">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="setting-item">
+        <div class="setting-label">
+          <span class="label-text">Enable Overlay</span>
+          <span class="label-desc">Show floating controls on video</span>
+        </div>
+        <label class="toggle-switch">
+          <input type="checkbox" id="enableOverlay">
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="speed-control">
+      <div class="speed-header">
+        <span class="label-text">Playback Speed</span>
+        <span class="speed-value" id="speedValue">1.0x</span>
+      </div>
+      <div class="range-container">
+        <input type="range" id="speedSlider" min="1.0" max="4.0" step="0.1" value="1.0">
+        <div class="range-labels">
+          <span>1x</span>
+          <span>4x</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer">
+      Developed by ZamiTech
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+
+</html>
