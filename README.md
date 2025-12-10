@@ -5,7 +5,7 @@ TranquilView is a Chrome extension designed to help you reclaim your attention w
 <img src="icons/icon128.png" alt="TranquilView Icon" width="64"/>
 
 ## Disclaimer
-This plugin is solely made for educational purposes. The developer created this project to understand the process of developing a browser plugin.
+This project is developed strictly for educational and learning purposes. Its primary objective is to demonstrate the architecture and development lifecycle of a modern browser extension. It serves as a practical case study in DOM manipulation and state management within a Chromium environment.
 
 ## Features
 
