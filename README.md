@@ -4,14 +4,17 @@ TranquilView is a Chrome extension designed to help you reclaim your attention w
 
 ![TranquilView Icon](icons/icon128.png)
 
+## Disclaimer
+This plugin is solely made for educational purposes. The developer created this project to understand the process of developing a browser plugin.
+
 ## Features
 
--   **🚫 Ad Blocking**: Automatically skips video ads and hides banner ads for an uninterrupted experience.
--   **💬 Hide Comments**: Remove the comments section to avoid toxic discussions and spoilers.
--   **🙈 Hide Recommendations**: Hide the sidebar and end-screen video recommendations to prevent "doom-scrolling."
--   **⚡ Enhanced Video Speed**: Control playback speed with precision (up to 4.0x) using a custom slider.
--   **🫧 Floating Overlay**: A beautiful, draggable "water-drop" style bubble in the bottom-left corner gives you quick access to toggles and speed controls.
--   **🎨 Glassmorphism UI**: A premium, modern Apple-style interface with transparency effects.
+-   **Ad Blocking**: Automatically skips video ads and hides banner ads for an uninterrupted experience.
+-   **Hide Comments**: Remove the comments section to avoid toxic discussions and spoilers.
+-   **Hide Recommendations**: Hide the sidebar and end-screen video recommendations to prevent "doom-scrolling."
+-   **Enhanced Video Speed**: Control playback speed with precision (up to 4.0x) using a custom slider.
+-   **Floating Overlay**: A beautiful, draggable "water-drop" style bubble in the bottom-left corner gives you quick access to toggles and speed controls.
+-   **Glassmorphism UI**: A premium, modern Apple-style interface with transparency effects.
 
 ## Installation
 
@@ -46,7 +49,7 @@ Click the TranquilView icon in your toolbar to open the main menu:
 -   **Speed Slider**: Set your preferred default playback speed.
 
 ### The Floating Overlay
-When watching a video, a small lightning bolt bubble (⚡) appears in the bottom-left corner.
+When watching a video, a small lightning bolt bubble appears in the bottom-left corner.
 -   **Click to Expand**: reveals quick controls.
 -   **Speed Control**: Adjust speed slightly for specific videos without saving it as the global default.
 -   **Opacity Slider**: Adjust the transparency of the overlay to blend perfectly with your video.
@@ -54,7 +57,5 @@ When watching a video, a small lightning bolt bubble (⚡) appears in the bottom
 ## Credits
 
 Developed by **ZamiTech**.
-
----
 
 **Repository**: [https://github.com/Faiz-3112/TranquilView-A-YouTube-Focus-Mode-Plugin](https://github.com/Faiz-3112/TranquilView-A-YouTube-Focus-Mode-Plugin)
