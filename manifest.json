@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "YouTube Focus",
+  "name": "TranquilView",
   "version": "1.0",
-  "description": "Stay focused on YouTube by hiding comments, recommendations, and controlling playback speed.",
+  "description": "A YouTube Focus Mode Plugin to block distractions like comments, ads, and recommendations.",
   "permissions": [
     "storage"
   ],
