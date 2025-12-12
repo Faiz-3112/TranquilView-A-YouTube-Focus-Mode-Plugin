@@ -1,48 +1,57 @@
 // YouTube Focus - Content Script
 
+// State Management (Per Tab)
+let state = {
+    hideComments: false,
+    hideRecommendations: false,
+    hideAds: false,
+    playbackSpeed: 1.0,
+    overlayOpacity: 0.4,
+    enableOverlay: false
+};
+
+let isBraveBrowser = false;
 let styleElement = document.createElement('style');
 document.documentElement.appendChild(styleElement);
 
-let currentSpeed = 1.0;
-let speedInterval = null;
-let adInterval = null;
+let adFrameId = null; // Replaces interval for smoother RAF loop
+let ignoreNextRateChange = false; // Flag to prevent loops when we set speed
+let overlayRefs = {}; // Store references to overlay elements for updating UI
 
 // Initialize
-chrome.storage.local.get(['hideComments', 'hideRecommendations', 'hideAds', 'playbackSpeed'], (result) => {
-    applyBlocking(result.hideComments, result.hideRecommendations, result.hideAds);
-    if (result.hideAds) {
-        startAdSkipper();
+async function initialize() {
+    // Check for Brave Browser
+    if (navigator.brave && await navigator.brave.isBrave()) {
+        isBraveBrowser = true;
     }
-    if (result.playbackSpeed) {
-        currentSpeed = parseFloat(result.playbackSpeed);
-        applySpeed(currentSpeed);
-    }
-});
 
-// Listen for changes
-chrome.storage.onChanged.addListener((changes, namespace) => {
-    if (namespace === 'local') {
-        if (changes.hideComments || changes.hideRecommendations || changes.hideAds) {
-            chrome.storage.local.get(['hideComments', 'hideRecommendations', 'hideAds'], (result) => {
-                applyBlocking(result.hideComments, result.hideRecommendations, result.hideAds);
-                if (result.hideAds) {
-                    startAdSkipper();
-                } else {
-                    stopAdSkipper();
-                }
-            });
-        }
-        if (changes.playbackSpeed) {
-            currentSpeed = parseFloat(changes.playbackSpeed.newValue);
-            applySpeed(currentSpeed);
-        }
-    }
-});
+    // Load DEFAULTS from storage, but do not listen for updates (Per-tab isolation)
+    chrome.storage.local.get(['hideComments', 'hideRecommendations', 'hideAds', 'playbackSpeed', 'enableOverlay', 'overlayOpacity'], (result) => {
+        state.hideComments = result.hideComments || false;
+        state.hideRecommendations = result.hideRecommendations || false;
+        state.hideAds = result.hideAds || false; // This is user preference. Actual logic checks Brave too.
+        state.playbackSpeed = result.playbackSpeed ? parseFloat(result.playbackSpeed) : 1.0;
+        // Default Overlay to TRUE if not set
+        state.enableOverlay = (result.enableOverlay !== undefined) ? result.enableOverlay : true;
+        state.overlayOpacity = result.overlayOpacity || 0.4;
 
-function applyBlocking(hideComments, hideRecommendations, hideAds) {
+        applyState(); // Apply the blocking and speed
+
+        if (state.enableOverlay) {
+            updateOverlayVisibility(true);
+        }
+    });
+}
+
+initialize();
+
+// Apply all blocking logic based on detection and state
+function applyState() {
+    const effectiveHideAds = isBraveBrowser ? false : state.hideAds;
+
+    // 1. CSS Injection
     let css = '';
-
-    if (hideComments) {
+    if (state.hideComments) {
         css += `
             #comments,
             ytd-comments,
@@ -52,8 +61,7 @@ function applyBlocking(hideComments, hideRecommendations, hideAds) {
             }
         `;
     }
-
-    if (hideRecommendations) {
+    if (state.hideRecommendations) {
         css += `
             #secondary,
             #related,
@@ -62,67 +70,223 @@ function applyBlocking(hideComments, hideRecommendations, hideAds) {
             }
         `;
     }
-
-    if (hideAds) {
+    if (effectiveHideAds) {
+        // PROFESSIONAL STEALTH MODE (Camouflage)
+        // We do NOT use display: none, as YouTube detects that.
+        // Instead, we make them 1x1 pixels, transparent, and push them off-screen.
+        // Valid for static banners.
         css += `
             ytd-ad-slot-renderer,
-            .video-ads,
-            .ytp-ad-module,
             .ytd-action-companion-ad-renderer,
-            div#root.style-scope.ytd-display-ad-renderer {
-                display: none !important;
+            div#root.style-scope.ytd-display-ad-renderer,
+            ytd-promoted-sparkles-web-renderer,
+            ytd-player-legacy-desktop-watch-ads-renderer {
+                opacity: 0.01 !important;
+                height: 1px !important;
+                width: 1px !important;
+                position: absolute !important;
+                left: -9999px !important;
+                z-index: -1000 !important;
+                pointer-events: none !important;
             }
         `;
     }
-
     styleElement.textContent = css;
+
+    // 2. Ad Skipping (Active)
+    if (effectiveHideAds) {
+        startStealthSkipper();
+    } else {
+        stopAdSkipper();
+    }
+
+    // 3. Speed
+    applySpeed(state.playbackSpeed);
 }
 
-function startAdSkipper() {
-    if (adInterval) return;
-    adInterval = setInterval(() => {
-        // Click "Skip Ad" buttons
-        const skipButtons = document.querySelectorAll('.ytp-ad-skip-button, .ytp-ad-skip-button-modern');
-        skipButtons.forEach(btn => btn.click());
+// --- Messaging (Popup Communication) ---
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.action === "GET_STATUS") {
+        sendResponse({
+            ...state,
+            isBrave: isBraveBrowser
+        });
+    } else if (request.action === "UPDATE_STATUS") {
+        // Update local state with changes from Popup
+        if (request.updates) {
+            Object.keys(request.updates).forEach(key => {
+                state[key] = request.updates[key];
+            });
+            applyState();
 
-        // Click "Overlay Close" buttons
-        const overlayCloseButtons = document.querySelectorAll('.ytp-ad-overlay-close-button');
-        overlayCloseButtons.forEach(btn => btn.click());
+            // Start/Stop Overlay if changed
+            if (request.updates.enableOverlay !== undefined) {
+                updateOverlayVisibility(state.enableOverlay);
+            }
 
-        // Fast forward video ads if they are unskippable or just to be sure
-        const video = document.querySelector('video');
-        const adShowing = document.querySelector('.ad-showing');
-        if (video && adShowing) {
-            video.playbackRate = 16.0; // Speed up to max
-            if (Number.isFinite(video.duration)) {
-                video.currentTime = video.duration; // Jump to end if possible
+            // Sync Overlay UI if it exists (e.g. if popup changed speed, overlay slider should wait)
+            syncOverlayUI();
+        }
+    }
+});
+
+
+// --- Speed Control & Sync ---
+
+function applySpeed(speed) {
+    const video = document.querySelector('video');
+    if (video) {
+        // We are setting it, so ignore the next event
+        if (Math.abs(video.playbackRate - speed) > 0.01) {
+            ignoreNextRateChange = true;
+            video.playbackRate = speed;
+        }
+    }
+}
+
+// Native Sync Listener
+const observer = new MutationObserver((mutations) => {
+    mutations.forEach(mutation => {
+        if (mutation.addedNodes.length) {
+            const video = document.querySelector('video');
+            if (video && !video.dataset.tvAttached) {
+                video.dataset.tvAttached = "true";
+                attachVideoListeners(video);
+                // Apply initial speed
+                if (state.playbackSpeed !== 1.0) {
+                    video.playbackRate = state.playbackSpeed;
+                }
             }
         }
-    }, 500);
+    });
+});
+observer.observe(document.body, { childList: true, subtree: true });
+
+// Attach to existing
+const existingVideo = document.querySelector('video');
+if (existingVideo) {
+    attachVideoListeners(existingVideo);
+}
+
+function attachVideoListeners(video) {
+    video.addEventListener('ratechange', () => {
+        if (ignoreNextRateChange) {
+            ignoreNextRateChange = false;
+            return;
+        }
+
+        // If we are here, it's a native change (IDM, YouTube Menu, Keyboard Shortcut)
+        // Check if it's an ad
+        const adShowing = document.querySelector('.ad-showing, .ad-interrupting');
+        if (adShowing) return;
+
+        // Update our state to match native
+        const newSpeed = video.playbackRate;
+        if (Math.abs(newSpeed - state.playbackSpeed) > 0.01) {
+            state.playbackSpeed = newSpeed;
+            // console.log("TranquilView: Native speed change detected:", newSpeed);
+            syncOverlayUI();
+        }
+    });
+}
+
+
+// --- Ad Skipper (Time Warp Engine) ---
+function startStealthSkipper() {
+    if (adFrameId) return; // Already running
+
+    // Helper to simulate native user click (Robust)
+    function triggerClick(element) {
+        if (!element) return;
+
+        // Standard click
+        try { element.click(); } catch (e) { }
+
+        // Mouse events (for stubborn listeners)
+        ['mousedown', 'mouseup', 'click'].forEach(evtType => {
+            const mouseEvent = new MouseEvent(evtType, {
+                view: window,
+                bubbles: true,
+                cancelable: true,
+                clientX: 0,
+                clientY: 0
+            });
+            element.dispatchEvent(mouseEvent);
+        });
+    }
+
+    function loop() {
+        const video = document.querySelector('video');
+
+        // 1. Precise Skip Button Targeting
+        // YouTube constantly changes these classes. We cast a wide net.
+        const possibleSkipSelectors = [
+            '.ytp-ad-skip-button',
+            '.ytp-ad-skip-button-modern',
+            '.videoAdUiSkipButton',
+            '.ytp-ad-overlay-close-button',
+            '.ytp-skip-ad-button',         // New variation
+            'button[id^="skip-button"]',   // ID based
+            '.ytp-ad-text.ytp-ad-skip-button-text' // Text container (parent might be button)
+        ];
+
+        // Find and click
+        possibleSkipSelectors.forEach(selector => {
+            const elements = document.querySelectorAll(selector);
+            elements.forEach(el => {
+                if (el && el.offsetParent !== null) { // Check visibility
+                    triggerClick(el);
+                    // Also try clicking parent if the element is just text
+                    if (el.tagName === 'SPAN' || el.tagName === 'DIV') {
+                        triggerClick(el.parentElement);
+                    }
+                }
+            });
+        });
+
+        // 2. Video Ad "Time Warp"
+        const adShowing = document.querySelector('.ad-showing, .ad-interrupting');
+        if (adShowing && video) {
+            // Force Mute immediately
+            video.muted = true;
+            video.volume = 0;
+
+            // Warp to End (Forces 'ended' event)
+            if (Number.isFinite(video.duration) && video.duration > 0) {
+                if (video.currentTime < video.duration - 0.1) {
+                    video.currentTime = video.duration;
+                }
+            }
+
+            // Speed Override (Fallback if warp fails)
+            video.playbackRate = 16.0;
+        }
+
+        // High-speed loop using RAF for minimal latency (every screen refresh)
+        adFrameId = requestAnimationFrame(loop);
+    }
+
+    loop();
 }
 
 function stopAdSkipper() {
-    if (adInterval) {
-        clearInterval(adInterval);
-        adInterval = null;
+    if (adFrameId) {
+        cancelAnimationFrame(adFrameId);
+        adFrameId = null;
     }
 }
 
 
-// --- Overlay Implementation ---
+// --- Overlay UI ---
 
 let overlayContainer = null;
 
-function updateOverlayVisibility(enableOverlay) {
-    if (enableOverlay) {
-        if (!overlayContainer) {
-            createOverlay();
-        }
+function updateOverlayVisibility(enable) {
+    if (enable) {
+        if (!overlayContainer) createOverlay();
         overlayContainer.style.display = 'block';
     } else {
-        if (overlayContainer) {
-            overlayContainer.style.display = 'none';
-        }
+        if (overlayContainer) overlayContainer.style.display = 'none';
     }
 }
 
@@ -130,191 +294,37 @@ function createOverlay() {
     overlayContainer = document.createElement('div');
     overlayContainer.id = 'yt-focus-overlay';
 
-    // Shadow DOM to isolate styles
     const shadow = overlayContainer.attachShadow({ mode: 'open' });
 
+    // Styles (Same as before)
     const style = document.createElement('style');
     style.textContent = `
-        :host {
-            position: fixed;
-            bottom: 20px;
-            left: 20px;
-            z-index: 2147483647; /* Max z-index */
-            font-family: 'Roboto', sans-serif;
-        }
-        .overlay-box {
-            background: rgba(20, 20, 20, 0.4);
-            border: 1px solid rgba(255, 255, 255, 0.15);
-            border-top: 1px solid rgba(255, 255, 255, 0.3);
-            border-radius: 20px;
-            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
-            backdrop-filter: blur(16px);
-            -webkit-backdrop-filter: blur(16px);
-            color: #fff;
-            width: 200px;
-            overflow: hidden;
-            transform-origin: bottom left;
-            transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1); /* Bouncy spring */
-            transform: scale(1) translateY(0);
-            opacity: 1;
-        }
-        .overlay-box.minimized {
-            width: 44px;
-            height: 44px;
-            border-radius: 50%;
-            cursor: pointer;
-            padding: 0;
-            background: rgba(20, 20, 20, 0.6) !important; /* Force obscured bg when minimized */
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-        .overlay-box.minimized .header,
-        .overlay-box.minimized .content {
-            display: none;
-        }
-        .minimized-icon {
-            display: none;
-            font-size: 20px;
-        }
-        .overlay-box.minimized .minimized-icon {
-            display: block;
-            animation: popIn 0.3s ease;
-        }
-
-        @keyframes popIn {
-            0% { transform: scale(0); }
-            80% { transform: scale(1.2); }
-            100% { transform: scale(1); }
-        }
-
-        .header {
-            padding: 12px 14px;
-            background: linear-gradient(to bottom, rgba(255,255,255,0.05), rgba(255,255,255,0)); /* Subtle gloss */
-            cursor: pointer;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            user-select: none;
-            border-bottom: 1px solid rgba(255,255,255,0.05);
-        }
-        .title {
-            font-size: 13px;
-            font-weight: 600;
-            letter-spacing: 0.3px;
-        }
-        .minimize-btn {
-            background: rgba(255,255,255,0.1);
-            border: 1px solid rgba(255,255,255,0.1);
-            color: #eee;
-            cursor: pointer;
-            font-size: 12px;
-            width: 20px;
-            height: 20px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            transition: background 0.2s;
-        }
-        .minimize-btn:hover { background: rgba(255,255,255,0.25); }
-
-        .content {
-            padding: 14px;
-        }
-        .control-row {
-            margin-bottom: 14px;
-        }
-        .control-row:last-child { margin-bottom: 0; }
-        
-        label {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            font-size: 13px;
-            cursor: pointer;
-            font-weight: 400;
-            color: rgba(255,255,255,0.9);
-        }
-        
-        /* Custom Checkbox - Apple style toggle */
-        input[type="checkbox"] {
-            appearance: none;
-            width: 36px;
-            height: 20px;
-            background: rgba(255,255,255,0.2);
-            border-radius: 20px;
-            position: relative;
-            cursor: pointer;
-            transition: background 0.3s;
-        }
-        input[type="checkbox"]::after {
-            content: '';
-            position: absolute;
-            top: 2px;
-            left: 2px;
-            width: 16px;
-            height: 16px;
-            background: #fff;
-            border-radius: 50%;
-            transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
-            box-shadow: 0 1px 3px rgba(0,0,0,0.3);
-        }
-        input[type="checkbox"]:checked {
-            background: #34c759; /* Apple green */
-        }
-        input[type="checkbox"]:checked::after {
-            transform: translateX(16px);
-        }
-
-        /* Slider */
-        .speed-control {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-        }
-        .speed-header {
-            display: flex;
-            justify-content: space-between;
-            font-size: 11px;
-            color: rgba(255,255,255,0.7);
-            font-weight: 500;
-        }
-        input[type="range"] {
-            width: 100%;
-            appearance: none;
-            background: rgba(255,255,255,0.2);
-            height: 4px;
-            border-radius: 2px;
-            outline: none;
-        }
-        input[type="range"]::-webkit-slider-thumb {
-            appearance: none;
-            width: 16px;
-            height: 16px;
-            background: #fff;
-            border-radius: 50%;
-            cursor: pointer;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.3);
-        }
-
-        /* Minimized Icon */
-        .minimized-icon {
-            display: none;
-            font-size: 20px;
-            pointer-events: none;
-        }
-        .overlay-box.minimized .minimized-icon {
-            display: block;
-        }
-        .overlay-box.minimized .header,
-        .overlay-box.minimized .content {
-            display: none;
-        }
+        :host { position: fixed; bottom: 20px; left: 20px; z-index: 2147483647; font-family: 'Roboto', sans-serif; }
+        .overlay-box { background: rgba(20, 20, 20, 0.4); border: 1px solid rgba(255, 255, 255, 0.15); border-top: 1px solid rgba(255, 255, 255, 0.3); border-radius: 20px; box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37); backdrop-filter: blur(16px); width: 200px; overflow: hidden; transform-origin: bottom left; transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1); color: #fff; }
+        .overlay-box.minimized { width: 44px; height: 44px; border-radius: 50%; cursor: pointer; padding: 0; background: rgba(20, 20, 20, 0.6) !important; display: flex; align-items: center; justify-content: center; }
+        .overlay-box.minimized .header, .overlay-box.minimized .content { display: none; }
+        .minimized-icon { display: none; font-size: 20px; }
+        .overlay-box.minimized .minimized-icon { display: block; animation: popIn 0.3s ease; }
+        @keyframes popIn { 0% { transform: scale(0); } 80% { transform: scale(1.2); } 100% { transform: scale(1); } }
+        .header { padding: 12px 14px; background: linear-gradient(to bottom, rgba(255,255,255,0.05), rgba(255,255,255,0)); cursor: pointer; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.05); }
+        .title { font-size: 13px; font-weight: 600; }
+        .minimize-btn { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.1); color: #eee; cursor: pointer; font-size: 12px; width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
+        .content { padding: 14px; }
+        .control-row { margin-bottom: 14px; } .control-row:last-child { margin-bottom: 0; }
+        label { display: flex; align-items: center; justify-content: space-between; font-size: 13px; cursor: pointer; color: rgba(255,255,255,0.9); }
+        input[type="checkbox"] { appearance: none; width: 36px; height: 20px; background: rgba(255,255,255,0.2); border-radius: 20px; position: relative; cursor: pointer; transition: background 0.3s; }
+        input[type="checkbox"]::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; background: #fff; border-radius: 50%; transition: transform 0.3s; box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
+        input[type="checkbox"]:checked { background: #34c759; }
+        input[type="checkbox"]:checked::after { transform: translateX(16px); }
+        input[type="checkbox"]:disabled { opacity: 0.5; }
+        .speed-control { display: flex; flex-direction: column; gap: 8px; }
+        .speed-header { display: flex; justify-content: space-between; font-size: 11px; color: rgba(255,255,255,0.7); font-weight: 500; }
+        input[type="range"] { width: 100%; appearance: none; background: rgba(255,255,255,0.2); height: 4px; border-radius: 2px; outline: none; }
+        input[type="range"]::-webkit-slider-thumb { appearance: none; width: 16px; height: 16px; background: #fff; border-radius: 50%; cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
+        .brave-msg { font-size: 10px; color: #aaa; margin-top: 4px; display: none; font-style: italic; }
     `;
 
     const wrapper = document.createElement('div');
-    // Start minimized by default
     wrapper.className = 'overlay-box minimized';
     wrapper.innerHTML = `
         <div class="header">
@@ -327,6 +337,7 @@ function createOverlay() {
                     Block Ads
                     <input type="checkbox" id="overlay-ads">
                 </label>
+                <div class="brave-msg" id="brave-msg">Managed by Brave</div>
             </div>
             <div class="control-row speed-control">
                 <div class="speed-header">
@@ -348,173 +359,87 @@ function createOverlay() {
 
     shadow.appendChild(style);
     shadow.appendChild(wrapper);
-    // Use documentElement to ensure it exists and isn't replaced by SPA body changes easily
-    // Also ensures it's above body content if z-index fights occur
     document.documentElement.appendChild(overlayContainer);
 
-    // Elements
-    const adCheckbox = wrapper.querySelector('#overlay-ads');
-    const speedSlider = wrapper.querySelector('#overlay-speed');
-    const speedVal = wrapper.querySelector('#overlay-speed-val');
-    const opacitySlider = wrapper.querySelector('#overlay-opacity');
-    const opacityVal = wrapper.querySelector('#overlay-opacity-val');
-    const minimizeBtn = wrapper.querySelector('.minimize-btn');
-    const header = wrapper.querySelector('.header');
+    // Save Refs
+    overlayRefs = {
+        adCheckbox: wrapper.querySelector('#overlay-ads'),
+        speedSlider: wrapper.querySelector('#overlay-speed'),
+        speedVal: wrapper.querySelector('#overlay-speed-val'),
+        opacitySlider: wrapper.querySelector('#overlay-opacity'),
+        opacityVal: wrapper.querySelector('#overlay-opacity-val'),
+        wrapper: wrapper,
+        braveMsg: wrapper.querySelector('#brave-msg')
+    };
 
-    // Sync Initial State
-    chrome.storage.local.get(['hideAds', 'playbackSpeed', 'overlayOpacity'], (res) => {
-        if (res.hideAds !== undefined) adCheckbox.checked = res.hideAds;
-        if (res.playbackSpeed !== undefined) {
-            speedSlider.value = res.playbackSpeed;
-            speedVal.textContent = res.playbackSpeed + 'x';
-        }
-        const op = res.overlayOpacity !== undefined ? res.overlayOpacity : 0.4;
-        opacitySlider.value = op;
-        opacityVal.textContent = Math.round(op * 100) + '%';
-        // Only apply opacity background if NOT minimized, handled in toggle logic or CSS if possible
-        // But for transparency slider we need inline style
-        if (!wrapper.classList.contains('minimized')) {
-            wrapper.style.background = `rgba(20, 20, 20, ${op})`;
+    // Initialize UI
+    syncOverlayUI();
+
+    // Listeners (Update LOCAL STATE, do NOT save to storage)
+    overlayRefs.adCheckbox.addEventListener('change', (e) => {
+        if (!isBraveBrowser) {
+            state.hideAds = e.target.checked;
+            applyState();
         }
     });
 
-    // Listeners
-    adCheckbox.addEventListener('change', (e) => {
-        chrome.storage.local.set({ hideAds: e.target.checked });
-    });
-
-    speedSlider.addEventListener('input', (e) => {
+    overlayRefs.speedSlider.addEventListener('input', (e) => {
         const val = e.target.value;
-        speedVal.textContent = val + 'x';
-        chrome.storage.local.set({ playbackSpeed: val });
-        currentSpeed = parseFloat(val);
-        applySpeed(currentSpeed);
+        state.playbackSpeed = val; // Update state
+        overlayRefs.speedVal.textContent = val + 'x';
+        applySpeed(parseFloat(val));
     });
 
-    opacitySlider.addEventListener('input', (e) => {
+    overlayRefs.opacitySlider.addEventListener('input', (e) => {
         const val = e.target.value;
-        opacityVal.textContent = Math.round(val * 100) + '%';
-        wrapper.style.background = `rgba(20, 20, 20, ${val})`;
-        chrome.storage.local.set({ overlayOpacity: val });
+        state.overlayOpacity = val;
+        overlayRefs.opacityVal.textContent = Math.round(val * 100) + '%';
+        overlayRefs.wrapper.style.background = `rgba(20, 20, 20, ${val})`;
     });
 
-    // Toggle Expansion Logic
-    // If minimized, any click expands it.
-    // If expanded, click on header or minimize btn collapses it. (or outside? user didn't ask)
-
-    wrapper.addEventListener('click', (e) => {
-        // If clicking slider or checkbox, don't collapse unless it's the header/minimize
-        if (wrapper.classList.contains('minimized')) {
-            wrapper.classList.remove('minimized');
-            // Re-apply background opacity
-            const currentOp = opacitySlider.value;
-            wrapper.style.background = `rgba(20, 20, 20, ${currentOp})`;
+    // Minimize logic
+    overlayRefs.wrapper.addEventListener('click', () => {
+        if (overlayRefs.wrapper.classList.contains('minimized')) {
+            overlayRefs.wrapper.classList.remove('minimized');
+            overlayRefs.wrapper.style.background = `rgba(20, 20, 20, ${state.overlayOpacity})`;
         }
     });
 
-    minimizeBtn.addEventListener('click', (e) => {
+    wrapper.querySelector('.minimize-btn').addEventListener('click', (e) => {
         e.stopPropagation();
-        wrapper.classList.add('minimized');
-        wrapper.style.background = ''; // Reset to CSS default for minimized
+        overlayRefs.wrapper.classList.add('minimized');
+        overlayRefs.wrapper.style.background = '';
     });
 
-    header.addEventListener('click', (e) => {
-        if (!wrapper.classList.contains('minimized')) {
+    wrapper.querySelector('.header').addEventListener('click', (e) => {
+        if (!overlayRefs.wrapper.classList.contains('minimized')) {
             e.stopPropagation();
-            wrapper.classList.add('minimized');
-            wrapper.style.background = '';
-        }
-    });
-
-    // External changes sync
-    chrome.storage.onChanged.addListener((changes) => {
-        if (changes.hideAds && changes.hideAds.newValue !== adCheckbox.checked) {
-            adCheckbox.checked = changes.hideAds.newValue;
-        }
-        if (changes.playbackSpeed && changes.playbackSpeed.newValue !== speedSlider.value) {
-            speedSlider.value = changes.playbackSpeed.newValue;
-            speedVal.textContent = changes.playbackSpeed.newValue + 'x';
-        }
-        if (changes.overlayOpacity && changes.overlayOpacity.newValue !== opacitySlider.value) {
-            const val = changes.overlayOpacity.newValue;
-            opacitySlider.value = val;
-            opacityVal.textContent = Math.round(val * 100) + '%';
-            if (!wrapper.classList.contains('minimized')) {
-                wrapper.style.background = `rgba(20, 20, 20, ${val})`;
-            }
+            overlayRefs.wrapper.classList.add('minimized');
+            overlayRefs.wrapper.style.background = '';
         }
     });
 }
 
-// Hook into existing init logic
-chrome.storage.local.get(['enableOverlay'], (result) => {
-    if (result.enableOverlay) {
-        updateOverlayVisibility(true);
+function syncOverlayUI() {
+    if (!overlayRefs.wrapper) return;
+
+    if (isBraveBrowser) {
+        overlayRefs.adCheckbox.disabled = true;
+        overlayRefs.adCheckbox.checked = false;
+        overlayRefs.braveMsg.style.display = 'block';
+    } else {
+        overlayRefs.adCheckbox.disabled = false;
+        overlayRefs.adCheckbox.checked = state.hideAds;
+        overlayRefs.braveMsg.style.display = 'none';
     }
-});
 
-// Update the main onChanged listener to also handle enableOverlay
-// We do this by adding a specific check in the existing listener or adding a new one.
-// Since we can have multiple listeners, adding one here for the overlay specific stuff is fine.
-chrome.storage.onChanged.addListener((changes) => {
-    if (changes.enableOverlay) {
-        updateOverlayVisibility(changes.enableOverlay.newValue);
-    }
-});
+    overlayRefs.speedSlider.value = state.playbackSpeed;
+    overlayRefs.speedVal.textContent = state.playbackSpeed + 'x';
 
+    overlayRefs.opacitySlider.value = state.overlayOpacity;
+    overlayRefs.opacityVal.textContent = Math.round(state.overlayOpacity * 100) + '%';
 
-// Enforce speed periodically because YouTube can reset it (ads, navigation, etc.)
-// and on 'ratechange' event
-function enforceSpeed() {
-    const video = document.querySelector('video');
-    if (video && !video.paused && video.playbackRate !== currentSpeed) {
-        // Only force if significantly different to assume it wasn't a minor drift
-        // or if we really want to override user manual changes (which we do, based on the slider)
-        video.playbackRate = currentSpeed;
-    }
-}
-
-// Start enforcement loop
-if (speedInterval) clearInterval(speedInterval);
-speedInterval = setInterval(enforceSpeed, 1000);
-
-// Also listen for navigation events or new video elements
-const observer = new MutationObserver((mutations) => {
-    for (const mutation of mutations) {
-        if (mutation.addedNodes.length) {
-            const video = document.querySelector('video');
-            if (video) {
-                video.playbackRate = currentSpeed;
-                video.addEventListener('ratechange', () => {
-                    // If the rate changes and it's not our target, set it back?
-                    // Careful to avoid loops if setting it triggers the event.
-                    // We trust manual enforcement or interval for now to avoid fighting too hard.
-                    if (Math.abs(video.playbackRate - currentSpeed) > 0.1) {
-                        video.playbackRate = currentSpeed;
-                    }
-                });
-            }
-        }
-    }
-});
-
-observer.observe(document.body, { childList: true, subtree: true });
-
-// Initial attachment
-const initialVideo = document.querySelector('video');
-if (initialVideo) {
-    initialVideo.playbackRate = currentSpeed;
-    initialVideo.addEventListener('ratechange', () => {
-        if (Math.abs(initialVideo.playbackRate - currentSpeed) > 0.1) {
-            initialVideo.playbackRate = currentSpeed;
-        }
-    });
-}
-
-// Helper to apply speed
-function applySpeed(speed) {
-    const video = document.querySelector('video');
-    if (video) {
-        video.playbackRate = speed;
+    if (!overlayRefs.wrapper.classList.contains('minimized')) {
+        overlayRefs.wrapper.style.background = `rgba(20, 20, 20, ${state.overlayOpacity})`;
     }
 }

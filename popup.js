@@ -1,51 +1,83 @@
 document.addEventListener('DOMContentLoaded', () => {
-    const hideCommentsCheckbox = document.getElementById('hideComments');
-    const hideRecommendationsCheckbox = document.getElementById('hideRecommendations');
-    const hideAdsCheckbox = document.getElementById('hideAds');
-    const enableOverlayCheckbox = document.getElementById('enableOverlay');
+    // UI Elements
+    const hideComments = document.getElementById('hideComments');
+    const hideRecommendations = document.getElementById('hideRecommendations');
+    const hideAds = document.getElementById('hideAds');
+    const enableOverlay = document.getElementById('enableOverlay');
     const speedSlider = document.getElementById('speedSlider');
-    const speedValueDisplay = document.getElementById('speedValue');
+    const speedValue = document.getElementById('speedValue');
 
-    // Load saved settings
-    chrome.storage.local.get(['hideComments', 'hideRecommendations', 'hideAds', 'enableOverlay', 'playbackSpeed'], (result) => {
-        if (result.hideComments !== undefined) {
-            hideCommentsCheckbox.checked = result.hideComments;
-        }
-        if (result.hideRecommendations !== undefined) {
-            hideRecommendationsCheckbox.checked = result.hideRecommendations;
-        }
-        if (result.hideAds !== undefined) {
-            hideAdsCheckbox.checked = result.hideAds;
-        }
-        if (result.enableOverlay !== undefined) {
-            enableOverlayCheckbox.checked = result.enableOverlay;
-        }
-        if (result.playbackSpeed !== undefined) {
-            speedSlider.value = result.playbackSpeed;
-            speedValueDisplay.textContent = `${result.playbackSpeed}x`;
-        }
+    // Helper to get active tab
+    function getActiveTab(callback) {
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+            if (tabs && tabs.length > 0) {
+                callback(tabs[0]);
+            }
+        });
+    }
+
+    // Initialize UI from Active Tab State
+    getActiveTab((tab) => {
+        // Send message to content script to get current state
+        chrome.tabs.sendMessage(tab.id, { action: "GET_STATUS" }, (response) => {
+            if (chrome.runtime.lastError) {
+                // Content script might not be injected (e.g., restricted page or new tab)
+                console.log("TranquilView: Could not connect to content script.");
+                // Optionally disable controls or show message
+                return;
+            }
+
+            if (response) {
+                // Update UI based on response
+                hideComments.checked = response.hideComments;
+                hideRecommendations.checked = response.hideRecommendations;
+                hideAds.checked = response.hideAds;
+                enableOverlay.checked = response.enableOverlay;
+
+                speedSlider.value = response.playbackSpeed;
+                speedValue.textContent = response.playbackSpeed + 'x';
+
+                // Brave Handling in Popup
+                if (response.isBrave) {
+                    hideAds.disabled = true;
+                    hideAds.checked = false; // Visual only
+                    // Optionally append text to label
+                    hideAds.parentElement.previousElementSibling.querySelector('.label-desc').textContent = "Managed by Brave Browser";
+                }
+            }
+        });
     });
 
-    // Save settings on change
-    hideCommentsCheckbox.addEventListener('change', () => {
-        chrome.storage.local.set({ hideComments: hideCommentsCheckbox.checked });
+    // Listeners for UI Changes
+    function sendUpdate(updates) {
+        getActiveTab((tab) => {
+            chrome.tabs.sendMessage(tab.id, {
+                action: "UPDATE_STATUS",
+                updates: updates
+            });
+        });
+    }
+
+    hideComments.addEventListener('change', (e) => {
+        sendUpdate({ hideComments: e.target.checked });
     });
 
-    hideRecommendationsCheckbox.addEventListener('change', () => {
-        chrome.storage.local.set({ hideRecommendations: hideRecommendationsCheckbox.checked });
+    hideRecommendations.addEventListener('change', (e) => {
+        sendUpdate({ hideRecommendations: e.target.checked });
     });
 
-    hideAdsCheckbox.addEventListener('change', () => {
-        chrome.storage.local.set({ hideAds: hideAdsCheckbox.checked });
+    hideAds.addEventListener('change', (e) => {
+        sendUpdate({ hideAds: e.target.checked });
     });
 
-    enableOverlayCheckbox.addEventListener('change', () => {
-        chrome.storage.local.set({ enableOverlay: enableOverlayCheckbox.checked });
+    enableOverlay.addEventListener('change', (e) => {
+        sendUpdate({ enableOverlay: e.target.checked });
     });
 
-    speedSlider.addEventListener('input', () => {
-        const speed = speedSlider.value;
-        speedValueDisplay.textContent = `${speed}x`;
-        chrome.storage.local.set({ playbackSpeed: speed });
+    speedSlider.addEventListener('input', (e) => {
+        const val = e.target.value;
+        speedValue.textContent = val + 'x';
+        sendUpdate({ playbackSpeed: val });
     });
+
 });
